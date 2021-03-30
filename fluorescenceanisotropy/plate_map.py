@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import string, math
+import warninings
 from itertools import product
 
 # custom errors 
@@ -211,8 +212,8 @@ def labelwell(platemap, labelby, iterrange, str_format=None):
         return str(platemap[labelby].iloc[iterrange]).replace(" ", "\n")
 
     
-def wellcolour(platemap, colorby, cmap, iterrange):
-    """Returns a unique colour for each label or defined condition.
+def get_colour_dict(platemap, colorby, cmap, **kwargs):
+    """Generates a dictionary with colours for all values that are plotted on the platemap.
     
     Wellcolour generates a dictionary of colours for each unique label. This can be used to colour code figures to a defined label. 
     
@@ -226,25 +227,49 @@ def wellcolour(platemap, colorby, cmap, iterrange):
     :return: RGB array of a colour that corresponds to a unique label
     :rtype: numpy array
     """
-    # unique strings in the defined column are used as the list of labels, converted to strings to avoid errors.
-    types = [str(i) for i in list(platemap[colorby].unique())]
-    cmap = plt.get_cmap(cmap)
-    # get equally spaced colour values
-    colors = cmap(np.linspace(0, 1, len(types)))
-    if colorby in ['p', 's', 'p_corrected', 's_corrected', 'r_raw', 'r_corrected', 'i_raw', 'i_percent']:
-        vals = platemap[colorby][platemap['Type'] != 'blank'].to_numpy()
-        norm = (vals - np.nanmin(vals)) / (np.nanmax(vals) - np.nanmin(vals))
-        colors = cmap(norm)
-        types = vals.astype(str)
-    colordict = dict(zip(types, colors))
-    #colordict['nan'] = 'yellow'
-    if platemap['Type'].iloc[iterrange] == 'blank':
+    
+    cmap = plt.get_cmap(cmap)   # get the colourmap object
+    
+    if kwargs['categorical'] == False:   
+        
+        if kwargs['blank_yellow'] == True:   # if the blanks are yellow, do not create a colour for them
+            vals = platemap[platemap['Type'] != 'blank'][colorby].dropna().to_numpy()
+        else:   # if blanks are not yellow, include them in the vals array so that colours are generated for those values
+            vals = platemap[colorby].dropna().to_numpy()
+        
+        if kwargs['scale'] == 'log': 
+            if np.any(vals<=0):   # return warning if the scaling is logarithmic but data contains non-positive values
+                warnings.warn('The logarithmic scale could not be used becasue the data contains values less than or equal to 0. The default linear scale was used instead.', RuntimeWarning)
+            else:
+                logvals = np.log10(vals)  
+                norm = (logvals - np.min(logvals)) / (np.max(logvals) - np.min(logvals))   # normalise the logarthm values to the range 0 - 1
+        
+        if kwargs['scale'] == 'lin' or np.any(vals<=0):   # normalise the data values to the range 0 - 1
+                norm = (vals - np.min(vals)) / (np.max(vals) - np.min(vals))
+        
+        colors = cmap(norm)    # for each normalised data value get a numerical value repesenting the colour
+        types = vals.astype(str)   # convert the data values to strings 
+    
+    else:   # previous functionality and functionality for categorical data
+        types = [str(i) for i in list(platemap[colorby].unique())]   # unique strings in the defined column are used as the list of labels, converted to strings to avoid errors
+        colors = cmap(np.linspace(0, 1, len(types)))   # get equally spaced colour values
+    
+    colordict = dict(zip(types, colors))   
+    return colordict
+    
+
+def wellcolour(colordict, platemap, colorby, iterrange, **kwargs):
+    """Returns a unique colour for each label or defined condition."""
+
+    color = colordict.get(str(platemap[colorby].iloc[iterrange]))
+    if kwargs['blank_yellow'] == True and platemap['Type'].iloc[iterrange] == 'blank':
         color = 'yellow'
-    else:
-        color = colordict.get(str(platemap[colorby].iloc[iterrange]))
+    else:   # previous functionality
+        colordict['nan'] = 'yellow'
+
     return color
 
-def visualise(platemap, title="", size=96, export=False, cmap='Paired', colorby='Type', labelby='Type', dpi=150, str_format=None, str_len=None):
+def visualise(platemap, title="", size=96, export=False, cmap='Paired', colorby='Type', labelby='Type', dpi=150, str_format=None, str_len=None, **kwargs):
     """Returns a visual representation of the plate map.
     
     The label and colour for each well can be customised to be a variable, for example 'Compound', 'Protein', 'Concentration', 'Concentration Units', 'Contents' or 'Type'. The size of the plate map used to generate the figure can be either 6, 12, 24, 48, 96 or 384. 
@@ -297,7 +322,8 @@ def visualise(platemap, title="", size=96, export=False, cmap='Paired', colorby=
         indexes = list(platemap.index)  # list of well ids
         # create a list of tuples, each one containing a row number corresponding to a specified row letter  and col number for all well ids so that there is no need to iterate over the 'Row' and 'Column' columns which are absent in flu_ani platemaps
         coords = [(ord(item[0].lower()) - 96, int(item[1:])) for item in indexes]
-                
+        colordict = get_colour_dict(platemap, colorby, cmap, **kwargs)   # get the dictionary with colours
+
         # plot plate types in grid, color code and label
         for i, coord in enumerate(coords):   # iterate over each tuple (effectively well id) in coords 
             ax = plt.subplot(grid[coord[0], coord[1]])
@@ -313,7 +339,7 @@ def visualise(platemap, title="", size=96, export=False, cmap='Paired', colorby=
                 ax.text(0.5, 0.5, 'empty', size=str(fontsize(sizeby='empty', plate_size=size, str_len=str_len)), wrap=True, ha="center", va="center")
 
             else:
-                ax.add_artist(plt.Circle((0.5, 0.5), 0.49, facecolor=wellcolour(platemap, colorby, cmap, i), edgecolor=hatchdict[str(platemap['Valid'].iloc[i])][1], lw=0.5, hatch = hatchdict[str(platemap['Valid'].iloc[i])][0]))
+                ax.add_artist(plt.Circle((0.5, 0.5), 0.49, facecolor=wellcolour(colordict, platemap, colorby, i, **kwargs), edgecolor=hatchdict[str(platemap['Valid'].iloc[i])][1], lw=0.5, hatch = hatchdict[str(platemap['Valid'].iloc[i])][0]))
 
                 # LABELS 
                 # nan option allows a blank label if there is nothing stipulated for this label condition
@@ -327,7 +353,8 @@ def visualise(platemap, title="", size=96, export=False, cmap='Paired', colorby=
     
     except:
         print('error!')
-
+        
+        
 def visualise_all_series(x, y, platemap, share_y, size = 96, title = " ", export = False, cmap = 'Dark2_r',
              colorby = 'Type', labelby = 'Type', dpi = 200):
     """Returns a plot for each series, the location on the grid corresponding to the location of each assay on the well plate.
